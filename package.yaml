@@ -20,7 +20,10 @@ extra-source-files:
 description:         Please see the README on GitHub at <https://github.com/githubuser/Daemon#readme>
 
 dependencies:
-- base >= 4.7 && < 5
+- base >=4.7 && <5
+- mtl ==2.2.*
+- lens >=4.17
+- transformers ==0.5.6.*
 
 library:
   source-dirs: src
