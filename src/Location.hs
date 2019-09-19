@@ -18,4 +18,4 @@ data Location = Location
 makeLenses ''Location
 
 instance Show Location where
-  show loc = "<line "++show (loc^.line)++", column "++show (loc^.column)++">"
+  show loc = "((line "++show (loc^.line)++", column "++show (loc^.column)++"))"

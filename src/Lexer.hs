@@ -7,6 +7,7 @@ import           Control.Lens
 import           Control.Monad.State
 import           Data.Map            hiding (filter, map)
 import           Data.Maybe
+import           System.IO.Unsafe
 
 import           Location
 import           Token
@@ -41,7 +42,7 @@ lex str = execState lexMain initLexState ^. lexed where
 lexMain :: Lexer ()
 lexMain = use input >>= \case
   "" -> do appendWorking ; return () -- done
-  _  -> do lexNext ; lexMain            -- recurse
+  _  -> do lexNext ; lexMain         -- recurse
 
 lexNext :: Lexer ()
 lexNext = do
@@ -106,5 +107,10 @@ mergeToken tok =
 appendToken :: Token -> Lexer ()
 appendToken tok = do
   loc <- use location
-  lexed . ix loc .= tok
+  lexed . at loc ?= tok
   location . column += length tok
+
+debugLexState :: Lexer ()
+debugLexState = do
+  ls <- get
+  return $! unsafePerformIO $ print ls
