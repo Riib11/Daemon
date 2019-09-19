@@ -1,347 +1,212 @@
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE LambdaCase    #-}
+{-# LANGUAGE DeriveFunctor   #-}
+{-# LANGUAGE LambdaCase      #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Parser where
 
--- import           Control.Monad
--- import           Control.Monad.Trans
--- import           Control.Monad.Trans.State
--- import           Data.Char
--- import           System.IO.Unsafe
---
--- import           Lexer
---
--- {-
---   AST Types
--- -}
---
--- data Expression = ExpressionDisjunction Disjunction
---           | ExpressionLet Name Expression Expression
---           | ExpressionIf Expression Expression Expression
---           deriving (Show)
---
--- data Disjunction = DisjunctionOr Disjunction Conjunction
---           | DisjunctionConjunction Conjunction
---           deriving (Show)
---
--- data Conjunction = ConjunctionAnd Conjunction Comparison
---           | ConjunctionComparison Comparison
---           deriving (Show)
---
--- data Comparison = ComparisonEqual Addition Addition
---           | ComparisonLessThan Addition Addition
---           | ComparisonAddition Addition
---           deriving (Show)
---
--- data Addition = AdditionPlus Addition Multiplication
---           | AdditionMinus Addition Multiplication
---           | AdditionMultiplication Multiplication
---           deriving (Show)
---
--- data Multiplication = MultiplicationTimes Multiplication Nega
---           | MultiplicationDiv   Multiplication Nega
---           | MultiplicationMod   Multiplication Nega
---           | MultiplicationNega  Nega
---           deriving (Show)
---
--- data Nega = NegaNot Expo
---           | NegaExpo Expo
---           deriving (Show)
---
--- data Expo = ExpoExpo Atom Expo
---           | ExpoAtom Atom
---           deriving (Show)
---
--- data Atom = AtomVar String
---           | AtomInt Int
---           | AtomBool Bool
---           | AtomAssoc Expression
---           deriving (Show)
---
--- type Name = String
---
--- {-
---   Parser
--- -}
---
--- data ParseStatus a = ParseOk a
---                    | ParseError String [String]
---                    deriving (Functor)
---
--- instance Show a => Show (ParseStatus a) where
---   show (ParseOk a)         = show a
---   show (ParseError msg ss) = "ParseError: "++msg++"; at: ..."++unwords ss++"<end>"
---
--- instance Applicative ParseStatus where
---   pure a = ParseOk a
---   ParseError msg ss <*> _                 = ParseError msg ss
---   _                 <*> ParseError msg ss = ParseError msg ss
---   ParseOk f         <*> ParseOk a         = ParseOk (f a)
---
--- instance Monad ParseStatus where
---   ParseOk a         >>= fPb = fPb a
---   ParseError msg ss >>= fPb = ParseError msg ss
---
--- type Parser a = StateT [String] ParseStatus a
---
--- {-
---   Grammar Parsers
--- -}
---
--- parse :: [String] -> ParseStatus Expression
--- parse = evalStateT (do { e <- parseExpression ; parseEnd ; return e })
---
--- -- <expn> ::= <disj>
--- --          | let val <name> = <expn> in <expn> end
--- --          | if <expn> then <expn> else <expn>
--- parseExpression :: Parser Expression
--- parseExpression = do
---   getNext >>= \case
---     "let" -> do
---       parseToken "let"
---       parseToken "val"
---       x <- parseName
---       parseToken "="
---       e <- parseExpression
---       parseToken "in"
---       e' <- parseExpression
---       parseToken "end"
---       return $ ExpressionLet x e e'
---
---     "if" -> do
---       parseToken "if"
---       e <- parseExpression
---       parseToken "then"
---       e1 <- parseExpression
---       parseToken "else"
---       e2 <- parseExpression
---       return $ ExpressionIf e e1 e2
---
---     _ -> ExpressionDisjunction <$> parseDisjunction
---
--- -- <disj> ::= <disj> orelse <conj>
--- --          | <conj>
--- parseDisjunction :: Parser Disjunction
--- parseDisjunction = DisjunctionConjunction <$> parseConjunction >>= recurse where
---   recurse e = final e $ do
---     tok <- getNext
---     if "orelse" == tok then do { parseToken "orelse" ; e' <- parseConjunction ; recurse (DisjunctionOr e e') }
---       else return e
---
--- -- <conj> ::= <conj> andalso <cmpn>
--- --          | <cmpn>
--- parseConjunction :: Parser Conjunction
--- parseConjunction = ConjunctionComparison <$> parseComparison >>= recurse where
---   recurse e = final e $ do
---     tok <- getNext
---     if "andalso" == tok then do { parseToken "andalso" ; e' <- parseComparison ; recurse (ConjunctionAnd e e') }
---       else return e
---
--- -- <cmpn> ::= <addn> = <addn>
--- --          | <addn> < <addn>
--- --          | <addn>
--- parseComparison :: Parser Comparison
--- parseComparison = do
---   e <- parseAddition
---   tok <- getNext
---   if "=" == tok then do { parseToken "=" ; e' <- parseAddition ; return $ ComparisonEqual e e' } else
---     if "<" == tok then do { parseToken "<" ; e' <- parseAddition ; return $ ComparisonLessThan e e' }
---       else return $ ComparisonAddition e
---
--- -- <addn> ::= <addn> + <mult>
--- --          | <addn> - <mult>
--- --          | <mult>
--- parseAddition :: Parser Addition
--- parseAddition = AdditionMultiplication <$> parseMultiplication >>= recurse where
---   recurse :: Addition -> Parser Addition
---   recurse e = final e $ do
---     tok <- getNext
---     if "+" == tok then do { parseToken "+" ; e' <- parseMultiplication ; recurse (AdditionPlus e e') } else
---       if "-" == tok then do { parseToken "-" ; e' <- parseMultiplication ; recurse (AdditionMinus e e') }
---         else return e
---
--- -- <mult> ::= <mult> * <nega>
--- --          | <mult> div <nega>
--- --          | <mult> mod <nega>
--- --          | <nega>
--- parseMultiplication :: Parser Multiplication
--- parseMultiplication = MultiplicationNega <$> parseNega >>= recurse where
---   recurse e = final e $ do
---     tok <- getNext
---     if "*" == tok then do { parseToken "*" ; e' <- parseNega ; recurse (MultiplicationTimes e e') } else
---       if "div" == tok then do { parseToken "div" ; e' <- parseNega ; recurse (MultiplicationDiv e e') } else
---         if "mod" == tok then do { parseToken "mod" ; e' <- parseNega ; recurse (MultiplicationMod e e') }
---           else return e
---
--- -- <nega> ::= not <expo>
--- --          | <expo>
--- parseNega :: Parser Nega
--- parseNega = do
---   tok <- getNext
---   if "not" == tok
---     then do
---       parseToken "not"
---       NegaNot <$> parseExpo
---     else
---       NegaExpo <$> parseExpo
---
--- -- <expo> ::= <atom> ** <expo>
--- --          | <atom>
--- parseExpo :: Parser Expo
--- parseExpo = do
---   e <- parseAtom
---   final (ExpoAtom e) $ do
---     tok <- getNext
---     if "**" == tok then do { parseToken "**" ; ExpoExpo e <$> parseExpo }
---       else return $ ExpoAtom e
---
--- -- <atom> ::= <name>
--- --          | <int>
--- --          | <bool>
--- --          | ( <expn> )
--- parseAtom :: Parser Atom
--- parseAtom = do
---   tok <- getNext
---   if isInt tok then AtomInt <$> parseInt else
---     if isBool tok then AtomBool <$> parseBool else
---       if isName tok then AtomVar <$> parseName else
---         if "(" == tok then AtomAssoc <$> parseAssoc
---           else parseError $ "expected <atom>, but found "++show tok
---
--- parseInt :: Parser Int
--- parseInt = do
---   tok <- getNext
---   if isInt tok
---     then do parseToken tok ; return $ read tok
---     else parseError $ "expected <int>, but found "++show tok
---
--- parseBool :: Parser Bool
--- parseBool = do
---   tok <- getNext
---   if isBool tok
---     then do parseToken tok ; return $ tok == "true"
---     else parseError $ "expected <bool>, but found "++show tok
---
--- parseName :: Parser Name
--- parseName = do
---   tok <- getNext
---   if isName tok
---     then do parseToken tok ; parseToken tok
---     else parseError $ "expected <name>, but found "++show tok
---
--- parseAssoc :: Parser Expression
--- parseAssoc = do
---   parseToken "("
---   e <- parseExpression
---   parseToken ")"
---   return e
---
--- {-
---   Token Checks
--- -}
---
--- type TokenCheck = String -> Bool
---
--- isInt :: TokenCheck
--- isInt = all isDigit
---
--- isBool :: TokenCheck
--- isBool = (`elem` ["true", "false"])
---
--- isName :: TokenCheck
--- isName = not . (`elem` reserveds)
---
--- {-
---   Utility Parsers
--- -}
---
--- parseToken :: String -> Parser String
--- parseToken tok = do
---   tok' <- getNext
---   if tok == tok'
---     then do modify (drop 1) ; return tok
---     else parseError $ "expected "++show tok++" but found "++show tok'
---
--- parseEnd :: Parser ()
--- parseEnd = do
---   toks <- get
---   unless (null toks) . parseError $ "expected end, but some tokens left unparsed: "++show toks
---
--- atEnd :: Parser Bool
--- atEnd = null <$> get
---
--- getNext :: Parser String
--- getNext =
---   get >>= \case
---     [] -> parseError "tried to get next token when at end"
---     (s:ss) -> return s
---
--- parseError :: String -> Parser a
--- parseError msg = get >>= lift . ParseError msg
---
--- final :: a -> Parser a -> Parser a
--- final a p = atEnd >>= \case True -> return a ; False -> p
---
--- {-
---   Pretty Printing
--- -}
---
--- indent :: Int -> String
--- indent i = concat $ replicate i "  "
---
--- showPretty :: Expression -> String
--- showPretty = spTree 0 . treeOf where
---   spTree :: Int -> Tree String -> String
---   spTree i = \case
---     Leaf s -> indent i++s
---     Branch s ts -> unlines $ [indent i++s] ++ map (spTree (i+1)) ts
---
--- data Tree a = Branch String [Tree a] | Leaf a
---
--- treeOf :: Expression -> Tree String
--- treeOf = tExpression where
---   tExpression :: Expression -> Tree String
---   tExpression = \case
---     ExpressionLet n e1 e2 -> Branch "Let" [tName n, tExpression e1, tExpression e2]
---     ExpressionIf e e1 e2 -> Branch "If" [tExpression e, tExpression e2, tExpression e2]
---     ExpressionDisjunction e -> tDisjunction e
---
---   tDisjunction = \case
---     DisjunctionOr e1 e2 -> Branch "Or" [tDisjunction e1, tConjunction e2]
---     DisjunctionConjunction e -> tConjunction e
---
---   tConjunction = \case
---     ConjunctionAnd e1 e2 -> Branch "And" [tConjunction e1, tComparison e2]
---     ConjunctionComparison e -> tComparison e
---
---   tComparison = \case
---     ComparisonEqual e1 e2 -> Branch "Equaluals" [tAddition e1, tAddition e2]
---     ComparisonLessThan e1 e2 -> Branch "LessThan" [tAddition e1, tAddition e2]
---     ComparisonAddition e -> tAddition e
---
---   tAddition = \case
---     AdditionPlus e1 e2 -> Branch "Plus" [tAddition e1, tMultiplication e2]
---     AdditionMinus e1 e2 -> Branch "Minus" [tAddition e1, tMultiplication e2]
---     AdditionMultiplication e -> tMultiplication e
---
---   tMultiplication = \case
---     MultiplicationTimes e1 e2 -> Branch "Times" [tMultiplication e1, tNega e2]
---     MultiplicationDiv e1 e2 -> Branch "Div" [tMultiplication e1, tNega e2]
---     MultiplicationMod e1 e2 -> Branch "Mod" [tMultiplication e1, tNega e2]
---     MultiplicationNega e -> tNega e
---
---   tNega = \case
---     NegaNot e -> Branch "Not" [tExpo e]
---     NegaExpo e -> tExpo e
---
---   tExpo = \case
---     ExpoExpo e1 e2 -> Branch "Exponent" [tAtom e1, tExpo e2]
---     ExpoAtom e -> tAtom e
---
---   tAtom = \case
---     AtomVar n -> Branch "Var" [Leaf n]
---     AtomInt i -> Branch "Int" [Leaf $ show i]
---     AtomBool b -> Branch "Bool" [Leaf $ show b]
---     AtomAssoc e -> tExpression e
---
---   tName n = Branch "Var" [Leaf n]
+import           Control.Arrow
+import           Control.Lens
+import           Control.Monad
+import           Control.Monad.Trans
+import           Control.Monad.Trans.State
+import           Data.Char
+import           Data.Map
+
+import           Lexer                     hiding (lexed)
+import           Location
+import           Token
+
+{-
+  # Grammar Types
+-}
+
+data Program = Expression Expression deriving (Show)
+
+data Expression = UnaryOperation UnaryOperator Expression
+                | BinaryOperation BinaryOperator Expression Expression
+                | Binding Name Expression Expression
+                | Branching Expression Expression Expression
+                deriving (Show)
+
+data UnaryOperator = Not deriving (Show)
+
+data BinaryOperator = And | Or
+                    | Equals | LessThan
+                    | Plus | Minus
+                    | Times | Divide
+                    | Modulus | Exponential
+                    deriving (Show)
+
+data Atom = Variable Name
+          | Integer Int
+          | Boolean Bool
+          | Associated Expression
+          deriving (Show)
+
+type Name = String
+
+{-
+  # ParseState
+-}
+
+data ParseState = ParseState
+  { _tokenIndex :: Int
+  , _lexed      :: Map Location Token }
+  deriving (Show)
+
+makeLenses ''ParseState
+
+{-
+  # ParseStatus
+-}
+
+data ParseStatus a = Ok a | Error Location String
+
+instance Functor ParseStatus where
+  f `fmap` Ok a          = Ok (f a)
+  f `fmap` Error loc msg = Error loc msg
+
+instance Applicative ParseStatus where
+  pure = Ok
+  Ok f           <*> Ok a          = Ok (f a)
+  Ok _           <*> Error loc msg = Error loc msg
+  Error loc msg  <*> _             = Error loc msg
+
+instance Monad ParseStatus where
+  Ok a           >>= f = f a
+  Error loc msg  >>= _ = Error loc msg
+
+{-
+  # Parser
+-}
+
+type Parser = StateT ParseState ParseStatus
+
+{-
+  # Parsing
+-}
+
+parse :: Lexed -> ParseStatus Program
+parse lxd = evalStateT parseProgram initParseState where
+  initParseState = ParseState 0 lxd
+
+
+parseProgram :: Parser Program
+parseProgram = Expression <$> parseExpression
+
+
+parseExpression :: Parser Expression
+parseExpression = getNext >>= \case
+  -- let val «Name» = «Expression» in «Expression» end
+  "let" -> do
+           parseToken "let"
+           parseToken "val"
+           name <- parseName
+           parseToken "="
+           value <- parseExpression
+           parseToken "in"
+           child <- parseExpression
+           return $ Binding name value child
+  -- if «Expression» then «Expression» else «Expression»
+  "if"  -> do
+           parseToken "if"
+           cnd <- parseExpression
+           parseToken "then"
+           thn <- parseExpression
+           parseToken "else"
+           els <- parseExpression
+           return $ Branching cnd thn els
+
+  _     -> parseDisjunction
+
+
+parseDisjunction :: Parser Expression
+parseDisjunction = do
+  e <- parseConjunction
+  getMaybeNext >>= \case
+    Just "orelse" -> BinaryOperation Or e <$> parseDisjunction
+    _ -> return e
+
+parseConjunction :: Parser Expression
+parseConjunction = error "TODO"
+
+parseComparison :: Parser Expression
+parseComparison = error "TODO"
+
+parseAddition :: Parser Expression
+parseAddition = error "TODO"
+
+parseMultiplication :: Parser Expression
+parseMultiplication = error "TODO"
+
+parseNegative :: Parser Expression
+parseNegative = error "TODO"
+
+parseExponential :: Parser Expression
+parseExponential = error "TODO"
+
+parseAtom :: Parser Atom
+parseAtom = error "TODO"
+
+parseName :: Parser Name
+parseName = parseNext
+
+{-
+  ## Parsing Utilities
+-}
+
+getNext :: Parser Token
+getNext = do
+  lexed <- use lexed
+  loc <- getLocation
+  return $ lexed ! loc
+
+getMaybeNext :: Parser (Maybe Token)
+getMaybeNext = atEndOfInput >>= \case
+  True -> return Nothing
+  False -> Just <$> getNext
+
+parseNext :: Parser Token
+parseNext = do
+  tok <- getNext
+  incrementLocation
+  return tok
+
+parseToken :: Token -> Parser Token
+parseToken tok = do
+  tok' <- getNext
+  if tok == tok'
+    then parseNext
+    else errorUnexpected tok tok'
+
+atEndOfInput :: Parser Bool
+atEndOfInput = not <$> inBounds
+
+getLocation :: Parser Location
+getLocation = inBounds >>= \case
+  True -> uses lexed (keys >>> (!i))
+  False -> errorOutOfBounds
+
+inBounds :: Parser Bool
+inBounds = do
+  i <- use tokenIndex
+  l <- uses lexed (length . keys)
+  return $ i < l
+
+incrementLocation :: Parser ()
+incrementLocation = tokenIndex += 1
+
+{-
+  ## Parsing Errors
+-}
+
+errorUnexpected :: Token -> Token -> Parser a
+errorUnexpected tokExp toUnexp = errorHere $ "unexpected: "++show tokExp++", expected: "++show tokExp
+
+errorOutOfBounds :: Parser a
+errorOutOfBounds = errorHere $ "attempted to parse past end of input"
+
+errorHere :: String -> Parser a
+errorHere msg = do
+  loc <- getLocation
+  lift . Error loc msg

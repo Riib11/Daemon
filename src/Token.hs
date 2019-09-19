@@ -2,9 +2,18 @@
 
 module Token where
 
+import           Control.Arrow
+
 type Token = String
 
 data TokenType = Normal | Delimeter DelimeterType
+
+tokenTypeOf :: Token -> TokenType
+tokenTypeOf tok =
+  case filter (snd >>> (== tok)) delimeters of
+    []            -> Normal
+    (delTyp, _):_ -> Delimeter delTyp
+
 
 {-
   # Delimeters
