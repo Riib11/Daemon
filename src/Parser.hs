@@ -11,7 +11,7 @@ import           Control.Monad.Trans
 import           Control.Monad.Trans.State
 import           Data.Char
 import           Data.List                 as List
-import           Data.Map                  as Map hiding (foldl)
+import           Data.Map                  as Map hiding (foldl, map)
 import           System.IO.Unsafe
 
 import           Lexer                     hiding (lexed)
@@ -24,27 +24,32 @@ import           Token
 
 data Program = Expression Expression deriving (Show)
 
-data Expression = UnaryOperation UnaryOperator Expression
-                | BinaryOperation BinaryOperator Expression Expression
-                | Binding Name Expression Expression
-                | Branching Expression Expression Expression
-                | Atom Atom
-                deriving (Show)
+data Expression
+  = Binding Name Expression Expression
+  | Application Expression Expression
+  | Lambda Name Expression
+  | Branching Expression Expression Expression
+  | BinaryOperation BinaryOperator Expression Expression
+  | UnaryOperation UnaryOperator Expression
+  | Atom Atom
+  deriving (Show)
 
 data UnaryOperator = Not deriving (Show)
 
-data BinaryOperator = And | Or
-                    | Equals | LessThan
-                    | Plus | Minus
-                    | Times | Divide
-                    | Modulus | Exponential
-                    deriving (Show)
+data BinaryOperator
+  = And | Or
+  | Equals | LessThan
+  | Plus | Minus
+  | Times | Divide
+  | Modulus | Exponential
+  deriving (Show)
 
-data Atom = Variable Name
-          | Integer Int
-          | Boolean Bool
-          | Associated Expression
-          deriving (Show)
+data Atom
+  = Variable Name
+  | Integer Int
+  | Boolean Bool
+  | Associated Expression
+  deriving (Show)
 
 type Name = String
 
@@ -105,7 +110,7 @@ instance Monad ParseStatus where
 
 instance Show a => Show (ParseStatus a) where
   show (Ok a)          = show a
-  show (Error loc msg) = "[!] Error at "++show loc++" "++msg
+  show (Error loc msg) = "[!] Error at "++show loc++", "++msg
 
 {-
   # Parser
@@ -121,54 +126,113 @@ parse :: Lexed -> ParseStatus Program
 parse lxd = evalStateT parseProgram initParseState where
   initParseState = ParseState 0 lxd
 
-parseProgram :: Parser Program
-parseProgram = Expression <$> parseExpression
+{-
+  ## Parsing Program
+-}
 
+parseProgram :: Parser Program
+parseProgram = do
+  prgm <- Expression <$> parseExpression
+  parseEndOfInput
+  return prgm
+
+
+{-
+  ## Parsing Steps
+-}
 
 parseExpression :: Parser Expression
-parseExpression = getNext >>= \case
+parseExpression = do
+  -- return $! unsafePerformIO (print "parseExpression")
+  parseApplication
+  $ parseStructural
+  $ parseLambda
+  $ parseDisjunction
+  $ parseConjunction
+  $ parseComparison
+  $ parseAddition
+  $ parseMultiplication
+  $ parseNegation
+  $ parseExponential
+  $ Atom <$> parseAtom
+
+
+parseApplication :: Parser Expression -> Parser Expression
+parseApplication p' = do
+  -- return $! unsafePerformIO (print "parseApplication")
+  e <- p'
+  atEndOfInput >>= \case
+    True -> return e
+    False -> tryParse (parseApplication p') >>= \case
+      -- «Expression» «Expression»
+      Just e' -> return $ Application e e'
+      --
+      Nothing -> return e
+
+
+parseStructural :: Parser Expression -> Parser Expression
+parseStructural p' = getNext >>= \case
   -- let val «Name» = «Expression» in «Expression» end
   "let" -> do
            parseToken "let"
            parseToken "val"
            name <- parseName
            parseToken "="
-           value <- parseExpression
+           value <- p'
            parseToken "in"
-           child <- parseExpression
+           child <- p'
            return $ Binding name value child
   -- if «Expression» then «Expression» else «Expression»
   "if"  -> do
            parseToken "if"
-           cnd <- parseExpression
+           cnd <- p'
            parseToken "then"
-           thn <- parseExpression
+           thn <- p'
            parseToken "else"
-           els <- parseExpression
+           els <- p'
            return $ Branching cnd thn els
+  --
+  _ -> p'
 
-  _     -> parseDisjunction
 
-parseDisjunction :: Parser Expression
-parseDisjunction = parseLeftAssociativeBinaryOperation [Or] parseConjunction
+parseLambda :: Parser Expression -> Parser Expression
+parseLambda p' = do
+  -- return $! unsafePerformIO (print "parseLambda")
+  tok <- getNext
+  getMaybeNextNext >>= \case
+    -- «Expression» => «Expression»
+    Just "=>" -> do parseToken tok ; parseToken "=>" ; Lambda tok <$> p'
+    --
+    _ -> p'
 
-parseConjunction :: Parser Expression
-parseConjunction = parseLeftAssociativeBinaryOperation [And] parseComparison
 
-parseComparison :: Parser Expression
-parseComparison = parseLeftAssociativeBinaryOperation [Equals, LessThan] parseAddition
+parseDisjunction :: Parser Expression -> Parser Expression
+parseDisjunction = parseLeftAssociativeBinaryOperation [Or]
 
-parseAddition :: Parser Expression
-parseAddition = parseLeftAssociativeBinaryOperation [Plus, Minus] parseMultiplication
 
-parseMultiplication :: Parser Expression
-parseMultiplication = parseLeftAssociativeBinaryOperation [Times, Divide, Modulus] parseNegation
+parseConjunction :: Parser Expression -> Parser Expression
+parseConjunction = parseLeftAssociativeBinaryOperation [And]
 
-parseNegation :: Parser Expression
-parseNegation = parseUnaryOperation [Not] parseExponential
 
-parseExponential :: Parser Expression
-parseExponential = parseRightAssociativeBinaryOperation [Exponential] (Atom <$> parseAtom)
+parseComparison :: Parser Expression -> Parser Expression
+parseComparison = parseLeftAssociativeBinaryOperation [Equals, LessThan]
+
+
+parseAddition :: Parser Expression -> Parser Expression
+parseAddition = parseLeftAssociativeBinaryOperation [Plus, Minus]
+
+
+parseMultiplication :: Parser Expression -> Parser Expression
+parseMultiplication = parseLeftAssociativeBinaryOperation [Times, Divide, Modulus]
+
+
+parseNegation :: Parser Expression -> Parser Expression
+parseNegation = parseUnaryOperation [Not]
+
+
+parseExponential :: Parser Expression -> Parser Expression
+parseExponential = parseRightAssociativeBinaryOperation [Exponential]
+
 
 parseAtom :: Parser Atom
 parseAtom = do
@@ -176,46 +240,65 @@ parseAtom = do
   let f :: Maybe Atom -> Parser (Maybe Atom) -> Parser (Maybe Atom)
       f Nothing  tryParse = tryParse
       f (Just a) _        = return $ Just a
-  foldM f Nothing [ tryParseIntAtom
-                  , tryParseBoolAtom
-                  , tryParseVariableAtom
-                  , tryParseAssociatedAtom ] >>= \case
+      atomParsers = map tryParse [ parseIntAtom, parseBoolAtom, parseVariableAtom, parseAssociatedAtom ]
+  foldM f Nothing atomParsers >>= \case
     Nothing -> errorUnexpected "<atom>" tok
     Just a -> return a
 
-tryParseIntAtom :: Parser (Maybe Atom)
-tryParseIntAtom = do
+
+parseIntAtom :: Parser Atom
+parseIntAtom = do
   tok <- getNext
   if all isDigit tok
-    then do parseNext ; return . Just $ Integer (read tok :: Int)
-    else return Nothing
+    then do parseNext ; return $ Integer (read tok :: Int)
+    else errorUnexpected "<int>" tok
 
-tryParseBoolAtom :: Parser (Maybe Atom)
-tryParseBoolAtom =
+
+parseBoolAtom :: Parser Atom
+parseBoolAtom =
   getNext >>= \case
-    "true" -> do parseNext ; return . Just $ Boolean True
-    "false" -> do parseNext ; return . Just $ Boolean False
-    _ -> return Nothing
+    "true" -> do parseNext ; return $ Boolean True
+    "false" -> do parseNext ; return $ Boolean False
+    tok -> errorUnexpected "<bool>" tok
 
-tryParseVariableAtom :: Parser (Maybe Atom)
-tryParseVariableAtom = do
+
+parseVariableAtom :: Parser Atom
+parseVariableAtom = do
   tok <- getNext
   case tokenTypeOf tok of
-    Normal -> return . Just $ Variable tok
-    _      -> return Nothing
+    Normal -> do parseNext ; return $ Variable tok
+    _      -> errorUnexpected "<var>" tok
 
-tryParseAssociatedAtom :: Parser (Maybe Atom)
-tryParseAssociatedAtom = do
+
+parseAssociatedAtom :: Parser Atom
+parseAssociatedAtom = do
   getNext >>= \case
-    "(" -> do parseNext ; e <- parseExpression ; parseToken ")" ; return . Just $ Associated e
-    _ -> return Nothing
+    "(" -> do parseNext ; e <- parseExpression ; parseToken ")" ; return $ Associated e
+    tok -> errorUnexpected "( <atom> )" tok
+
 
 parseName :: Parser Name
 parseName = parseNext
 
+
 {-
   ## Parsing Helpers
 -}
+
+
+subParse :: Parser a -> Parser (Maybe (a, ParseState))
+subParse p = do
+  -- return $! unsafePerformIO (print "subParse")
+  ps <- get
+  case runStateT p ps of
+    Ok (a, ps') -> return . Just $ (a, ps')
+    Error _ _   -> return Nothing
+
+
+tryParse :: Parser a -> Parser (Maybe a)
+tryParse p = subParse p >>= \case
+  Just (a, ps) -> do put ps ; return $ Just a
+  Nothing -> return Nothing
 
 
 -- TODO: right now, this is actually right-associative
@@ -250,6 +333,7 @@ parseRightAssociativeBinaryOperation os p = do
                    BinaryOperation o e <$> parseRightAssociativeBinaryOperation os p
         Nothing -> return e
 
+
 parseUnaryOperation :: [UnaryOperator] -> Parser Expression -> Parser Expression
 parseUnaryOperation os p =
   getMaybeNext >>= \case
@@ -276,6 +360,15 @@ getMaybeNext = atEndOfInput >>= \case
   True -> return Nothing
   False -> Just <$> getNext
 
+getMaybeNextNext :: Parser (Maybe Token)
+getMaybeNextNext = do
+  i <- use tokenIndex
+  l <- uses lexed (length . keys)
+  if i < l - 1
+    then Just . (!!(i+1)) <$> uses lexed elems
+    else return Nothing
+
+
 parseNext :: Parser Token
 parseNext = do
   tok <- getNext
@@ -297,10 +390,10 @@ parseToken tok = do
     else errorUnexpected tok tok'
 
 parseEndOfInput :: Parser ()
-parseEndOfInput = do
+parseEndOfInput =
   atEndOfInput >>= \case
     True -> return ()
-    False -> errorOutOfBounds
+    False -> errorUnexpectedContinuedInput =<< getNext
 
 atEndOfInput :: Parser Bool
 atEndOfInput = not <$> inBounds
@@ -326,7 +419,10 @@ incrementLocation = tokenIndex += 1
 -}
 
 errorUnexpected :: Token -> Token -> Parser a
-errorUnexpected tokExp tokUnexp = errorHere $ "unexpected: "++show tokUnexp++", expected: "++show tokExp
+errorUnexpected tokExp tokUnexp = errorHere $ "unexpected "++show tokUnexp++", expected "++show tokExp
+
+errorUnexpectedContinuedInput :: Token -> Parser a
+errorUnexpectedContinuedInput tokUnexp = errorHere $ "unexpected "++show tokUnexp++", expected end of input."
 
 errorOutOfBounds :: Parser a
 errorOutOfBounds = errorHere $ "attempted to parse past end of input"
