@@ -3,6 +3,7 @@ module Main where
 import           Prelude   hiding (lex)
 import           System.IO (hFlush, stdout)
 
+import           Evaluator
 import           Lexer
 import           Parser
 
@@ -22,8 +23,13 @@ loop = do
   input <- getLine
   let lexed = lex input
   let parsed = parse lexed
-  putStrLn $ "lexed:  "++show lexed
-  putStrLn $ "parsed: "++show parsed
+  putStrLn $ "lexed:     "++show lexed
+  putStrLn $ "parsed:    "++show parsed
+  case parsed of
+    Parser.Ok prgm -> do
+      let evaluated = evaluate prgm
+      putStrLn $ "evaluated: "++show evaluated
+    _ -> return ()
   loop
 
 prompt :: IO ()
