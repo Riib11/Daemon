@@ -6,6 +6,7 @@ import           System.IO (hFlush, stdout)
 import           Evaluator
 import           Lexer
 import           Parser
+import           Pretty
 
 title = "|| Daemon --- interpreter"
 titleBorder = replicate (length title + 5) '='
@@ -21,15 +22,20 @@ loop :: IO ()
 loop = do
   prompt
   input <- getLine
+  -- lex
   let lexed = lex input
-  let parsed = parse lexed
   putStrLn $ "lexed:     "++displayLexed lexed
-  putStrLn $ "parsed:    "++show parsed
-  case parsed of
-    Parser.Ok prgm -> do
-      let evaluated = evaluate prgm
-      putStrLn $ "evaluated: "++show evaluated
-    _ -> return ()
+  -- parse
+  case parse lexed of
+    Parser.Ok parsPrgm -> do
+      putStrLn $ "parsed:    "++pretty parsPrgm
+      -- evaluate
+      case evaluate parsPrgm of
+        Evaluator.Ok evalPrgm ->
+          putStrLn $ "evaluated: "++pretty evalPrgm
+        eErr -> putStrLn $ "evaluated: "++show eErr
+    pErr -> putStrLn $ "parsed:    "++show pErr
+  --
   loop
 
 prompt :: IO ()

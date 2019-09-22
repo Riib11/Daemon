@@ -17,6 +17,7 @@ import           System.IO.Unsafe
 
 import           Lexer                     hiding (lexed)
 import           Location
+import           Pretty
 import           Token
 
 {-
@@ -51,6 +52,23 @@ data BinaryOperator
 type Name = String
 
 {-
+  ## Pretty
+-}
+
+instance Pretty Program where
+  pretty (Expression e) = pretty e
+
+instance Pretty Expression where
+  pretty (Binding n e e')          = pretty n++" := "++pretty e++" ; "++pretty e'
+  pretty (Application e e')        = "("++pretty e++" "++pretty e'++")"
+  pretty (Lambda n e)              = "("++pretty n++" => "++pretty e++")"
+  pretty (Branching e e1 e2)       = "(if "++pretty e++" then ("++pretty e1++" else ("++pretty e2++"))"
+  pretty (BinaryOperation o e1 e2) = "("++pretty e1++" "++pretty o++" "++pretty e2++")"
+  pretty (UnaryOperation o e)      = "("++pretty o++" "++pretty e++")"
+  pretty (Literal t)               = pretty t
+  pretty (Associated e)            = "("++pretty e++")"
+
+{-
   ## Symbols
 -}
 
@@ -74,6 +92,12 @@ instance Symbolic BinaryOperator where
     Modulus -> "%"
     Exponential -> "**"
 
+instance Pretty UnaryOperator where
+  pretty = symbol
+
+instance Pretty BinaryOperator where
+  pretty = symbol
+
 {-
   # ParseState
 -}
@@ -89,7 +113,7 @@ makeLenses ''ParseState
   # ParseStatus
 -}
 
-data ParseStatus a = Ok a | Error (Location, String)
+data ParseStatus a = Ok a | Error (String, String)
 
 instance Functor ParseStatus where
   f `fmap` Ok a    = Ok (f a)
@@ -107,7 +131,7 @@ instance Monad ParseStatus where
 
 instance Show a => Show (ParseStatus a) where
   show (Ok a)             = show a
-  show (Error (loc, msg)) = "[!] Error at "++show loc++", "++msg
+  show (Error (loc, msg)) = "[!] "++loc++" " ++ msg
 
 {-
   # Parser
@@ -130,7 +154,7 @@ parse lxd = evalStateT parseProgram initParseState where
 parseProgram :: Parser Program
 parseProgram = do
   prgm <- Expression <$> parseExpression
-  -- parseEndOfInput
+  parseEndOfInput
   return prgm
 
 {-
@@ -139,72 +163,66 @@ parseProgram = do
 
 parseExpression :: Parser Expression
 parseExpression = do
-  return $! unsafePerformIO (print "parseExpression")
   parseStructural
+  $ parseLambda
   $ parseApplication
-  -- $ parseLambda
-  -- $ parseDisjunction
-  -- $ parseConjunction
-  -- $ parseComparison
-  -- $ parseAddition
-  -- $ parseMultiplication
-  -- $ parseNegation
-  -- $ parseExponential
+  $ parseDisjunction
+  $ parseConjunction
+  $ parseComparison
+  $ parseAddition
+  $ parseMultiplication
+  $ parseNegation
+  $ parseExponential
+  $ parseAssociated
   $ parseLiteral
 
 
 parseStructural :: Parser Expression -> Parser Expression
-parseStructural p' = let
+parseStructural p' =
+  let
+    -- let <Name> = <Expression> in <Expression> end
+    parseBinding = do
+      name <- parseName
+      parseToken ":="
+      value <- parseExpression
+      parseToken ";"
+      child <- parseExpression
+      return $ Binding name value child
 
-  -- let «Name» = «Expression» in «Expression» end
-  parseBinding = do
-    name <- parseName
-    parseToken ":="
-    value <- parseExpression
-    parseToken ";"
-    child <- parseExpression
-    return $ Binding name value child
+    -- if <Expression> then <Expression> else <Expression>
+    parseBranching = do
+      parseToken "if"
+      cnd <- parseExpression
+      parseToken "then"
+      thn <- parseExpression
+      parseToken "else"
+      els <- parseExpression
+      return $ Branching cnd thn els
 
-  -- if «Expression» then «Expression» else «Expression»
-  parseBranching = do
-    parseToken "if"
-    cnd <- parseExpression
-    parseToken "then"
-    thn <- parseExpression
-    parseToken "else"
-    els <- parseExpression
-    return $ Branching cnd thn els
-
-  in
-  getMaybeNextNext >>= \case
-    Just ":="  -> parseBinding
-    _          -> getNext >>= \case
-                    "if" -> parseBranching
-                    _ -> p'
-
-
-parseApplication :: Parser Expression -> Parser Expression
-parseApplication p' = do
-  e <- parseLiteral
-  ts <- uses lexed elems
-  i <- use tokenIndex
-  return $! unsafePerformIO (print $ (i, length ts))
-  return $! unsafePerformIO (print "parseApplicationRight")
-  parseLiteral
-  -- (tryParse $ parseLiteral) >>= \case
-  --   Just e' -> return $ Application e e'
-  --   Nothing -> return e
+  in getMaybeNextNext >>= \case
+        Just ":="  -> parseBinding
+        _          -> getNext >>= \case
+                        "if" -> parseBranching
+                        _ -> p'
 
 
 parseLambda :: Parser Expression -> Parser Expression
 parseLambda p' = do
-  -- return $! unsafePerformIO (print "parseLambda")
   tok <- getNext
   getMaybeNextNext >>= \case
-    -- «Expression» => «Expression»
+    -- <Expression> => <Expression>
     Just "=>" -> do parseToken tok ; parseToken "=>" ; Lambda tok <$> parseLambda p'
     --
     _ -> p'
+
+
+parseApplication :: Parser Expression -> Parser Expression
+parseApplication p' =
+  let recurse :: Expression -> Parser Expression
+      recurse e = (tryParse $ p') >>= \case
+                      Just e' -> recurse $ Application e e'
+                      Nothing -> return e
+  in recurse =<< p'
 
 
 parseDisjunction :: Parser Expression -> Parser Expression
@@ -235,19 +253,19 @@ parseExponential :: Parser Expression -> Parser Expression
 parseExponential = parseRightAssociativeBinaryOperation [Exponential]
 
 
+parseAssociated :: Parser Expression -> Parser Expression
+parseAssociated p' = do
+  getNext >>= \case
+    "(" -> do parseNext ; e <- parseExpression ; parseToken ")" ; return $ Associated e
+    _ -> p'
+
+
 parseLiteral :: Parser Expression
 parseLiteral = do
   tok <- getNext
   case tokenTypeOf tok of
     Normal -> Literal <$> parseNext
-    _      -> errorUnexpected "«Literal»" tok
-
-
-parseAssociated :: Parser Expression
-parseAssociated = do
-  getNext >>= \case
-    "(" -> do parseNext ; e <- parseExpression ; parseToken ")" ; return $ Associated e
-    tok -> errorUnexpected "( «Expression» )" tok
+    _      -> errorUnexpected "<Literal>" tok
 
 
 parseName :: Parser Name
@@ -318,13 +336,10 @@ parseUnaryOperation os p =
 -}
 
 getNext :: Parser Token
-getNext = do
-  inBounds >>= \case
-    True -> do
-      lexed <- use lexed
-      loc <- getLocation
-      return $ lexed!loc
-    False -> errorOutOfBounds
+getNext = atEndOfInput >>= \case
+  False -> do i <- use tokenIndex ; ts <- uses lexed elems ; return $ ts!!i
+  True  -> errorOutOfBounds
+
 
 getMaybeNext :: Parser (Maybe Token)
 getMaybeNext = atEndOfInput >>= \case
@@ -356,10 +371,12 @@ tryParseToken tok = do
 
 parseToken :: Token -> Parser Token
 parseToken tok = do
-  tok' <- getNext
-  if tok == tok'
-    then parseNext
-    else errorUnexpected tok tok'
+  getMaybeNext >>= \case
+    Just tok' -> if tok == tok'
+                   then parseNext
+                   else errorUnexpected tok tok'
+    Nothing -> errorUnexpected tok "<EOI>"
+
 
 parseEndOfInput :: Parser ()
 parseEndOfInput =
@@ -380,8 +397,8 @@ getLocation = do
 inBounds :: Parser Bool
 inBounds = do
   i <- use tokenIndex
-  l <- uses lexed (length . keys)
-  return $ i < l
+  ts <- uses lexed elems
+  return $ i < length ts
 
 incrementLocation :: Parser ()
 incrementLocation = tokenIndex += 1
@@ -401,8 +418,12 @@ errorOutOfBounds = errorHere $ "attempted to parse past end of input."
 
 errorHere :: String -> Parser a
 errorHere msg = do
-  loc <- getLocation
-  lift $ Error (loc, msg)
+  i <- use tokenIndex
+  locs <- uses lexed keys
+  if i < length locs
+    then lift $ Error (show $ locs!!i, msg)
+    else lift $ Error ("EOI", msg)
+
 
 {-
   # Debug

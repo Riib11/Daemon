@@ -54,7 +54,7 @@ lexNext = do
 
     (Delimeter Reserved, tok, input') -> do
                                          appendWorking          -- append working
-                                         mergeToken tok         -- merge reserved token
+                                         appendToken tok        -- append reserved token
                                          input .= input'        -- update input
 
     (Delimeter Space, tok, input')    -> do
@@ -75,7 +75,7 @@ lexNext = do
 --     else return the Normal token type, the first character, and the string afterwards
 extractTypedToken :: String -> (TokenType, Token, String)
 extractTypedToken str@(c:str') =
-  case filter (isJust . snd) . map (_2 %~ extractToken' str) $ delimeters of
+  case filter (isJust . snd) . map (_2 %~ flip extractToken str) $ delimeters of
     []                           -> (Normal, [c], str')
     (delTyp, Just (tok, str')):_ -> (Delimeter delTyp, tok, str')
 
@@ -87,8 +87,6 @@ extractToken tok str = recurse tok str where
   recurse [] ys         = Just (tok, ys)
   recurse xs []         = Nothing
   recurse (x:xs) (y:ys) = if x == y then recurse xs ys else Nothing
-
-extractToken' = flip extractToken -- reversed
 
 -- append the working lextoken to the current line
 appendWorking :: Lexer ()

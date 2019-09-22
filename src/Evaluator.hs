@@ -18,6 +18,7 @@ import           Data.Char
 import qualified Lexer
 import           Location
 import qualified Parser                    as P
+import           Pretty
 import           Token
 
 {-
@@ -38,6 +39,19 @@ data Value
 type Name = String
 
 {-
+  ## Pretty
+-}
+
+instance Pretty Program where
+  pretty (Value v) = pretty v
+
+instance Pretty Value where
+  pretty (Integer i)       = show i
+  pretty (Boolean b)       = show b
+  pretty (Closure n e ctx) = "("++n++" => "++pretty e++")"
+  pretty (Lazy e ctx)      = error "pretty (Lazy e ctx)"
+
+{-
   # EvaluatorState
 -}
 
@@ -49,6 +63,9 @@ data EvaluatorState = EvaluatorState
 type EvaluationContext = Map Name Value
 
 makeLenses ''EvaluatorState
+
+showEvaluationContext :: EvaluationContext -> String
+showEvaluationContext = unwords . map (\(n,v) -> "("++n++" => "++pretty v++")") . assocs
 
 {-
   # EvaluationStatus
@@ -134,15 +151,16 @@ evaluateExpression expr = case expr of
 evaluateClosure :: P.Expression -> Evaluator (P.Name, P.Expression, EvaluationContext)
 evaluateClosure e = evaluateExpression e >>= \case
   Closure n e ctx -> return (n, e, ctx)
-  eV -> errorUnexpected e "«Closure»" eV
+  eV -> errorUnexpected e "<Closure>" eV
 
 
 --  [n => v](e with ctx)
 evaluateApplication :: P.Name -> Value -> P.Expression -> EvaluationContext -> Evaluator Value
 evaluateApplication n v e ctx = subEvaluate $ do
   context %= union ctx
-  context . at n .= Just v
-  evaluateExpression e
+  subEvaluate $ do
+    context . at n .= Just v
+    evaluateExpression e
 
 
 integerBinaryOperators :: Map P.BinaryOperator (Int -> Int -> Int)
@@ -178,12 +196,12 @@ evaluateUnaryOperation o e = fail "TODO"
 evaluateInteger :: P.Expression -> Evaluator Int
 evaluateInteger e = evaluateExpression e >>= \case
   Integer i -> return i
-  v -> errorUnexpected e "«Integer»" v
+  v -> errorUnexpected e "<Integer>" v
 
 evaluateBoolean :: P.Expression -> Evaluator Bool
 evaluateBoolean e = evaluateExpression e >>= \case
   Boolean b -> return b
-  v -> errorUnexpected e "«Boolean»" v
+  v -> errorUnexpected e "<Boolean>" v
 
 evaluateLiteral :: Token -> Evaluator Value
 evaluateLiteral t = do
