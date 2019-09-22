@@ -23,7 +23,7 @@ loop = do
   input <- getLine
   let lexed = lex input
   let parsed = parse lexed
-  putStrLn $ "lexed:     "++show lexed
+  putStrLn $ "lexed:     "++displayLexed lexed
   putStrLn $ "parsed:    "++show parsed
   case parsed of
     Parser.Ok prgm -> do

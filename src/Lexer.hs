@@ -5,7 +5,7 @@ module Lexer where
 
 import           Control.Lens
 import           Control.Monad.State
-import           Data.Map            hiding (filter, map)
+import           Data.Map            hiding (filter, foldl, map)
 import           Data.Maybe
 import           System.IO.Unsafe
 
@@ -114,3 +114,10 @@ debugLexState :: Lexer ()
 debugLexState = do
   ls <- get
   return $! unsafePerformIO $ print ls
+
+{-
+  # Display
+-}
+
+displayLexed :: Lexed -> String
+displayLexed = show . elems

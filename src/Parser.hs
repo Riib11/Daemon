@@ -11,7 +11,8 @@ import           Control.Monad.Trans
 import           Control.Monad.Trans.State
 import           Data.Char
 import           Data.List                 as List
-import           Data.Map                  as Map hiding (foldl, map)
+import           Data.Map                  as Map hiding (drop, foldl, foldr,
+                                                   map)
 import           System.IO.Unsafe
 
 import           Lexer                     hiding (lexed)
@@ -129,7 +130,7 @@ parse lxd = evalStateT parseProgram initParseState where
 parseProgram :: Parser Program
 parseProgram = do
   prgm <- Expression <$> parseExpression
-  parseEndOfInput
+  -- parseEndOfInput
   return prgm
 
 {-
@@ -138,56 +139,61 @@ parseProgram = do
 
 parseExpression :: Parser Expression
 parseExpression = do
-  -- return $! unsafePerformIO (print "parseExpression")
-  parseApplication
-  $ parseStructural
-  $ parseLambda
-  $ parseDisjunction
-  $ parseConjunction
-  $ parseComparison
-  $ parseAddition
-  $ parseMultiplication
-  $ parseNegation
-  $ parseExponential
+  return $! unsafePerformIO (print "parseExpression")
+  parseStructural
+  $ parseApplication
+  -- $ parseLambda
+  -- $ parseDisjunction
+  -- $ parseConjunction
+  -- $ parseComparison
+  -- $ parseAddition
+  -- $ parseMultiplication
+  -- $ parseNegation
+  -- $ parseExponential
   $ parseLiteral
+
+
+parseStructural :: Parser Expression -> Parser Expression
+parseStructural p' = let
+
+  -- let «Name» = «Expression» in «Expression» end
+  parseBinding = do
+    name <- parseName
+    parseToken ":="
+    value <- parseExpression
+    parseToken ";"
+    child <- parseExpression
+    return $ Binding name value child
+
+  -- if «Expression» then «Expression» else «Expression»
+  parseBranching = do
+    parseToken "if"
+    cnd <- parseExpression
+    parseToken "then"
+    thn <- parseExpression
+    parseToken "else"
+    els <- parseExpression
+    return $ Branching cnd thn els
+
+  in
+  getMaybeNextNext >>= \case
+    Just ":="  -> parseBinding
+    _          -> getNext >>= \case
+                    "if" -> parseBranching
+                    _ -> p'
 
 
 parseApplication :: Parser Expression -> Parser Expression
 parseApplication p' = do
-  -- return $! unsafePerformIO (print "parseApplication")
-  e <- p'
-  atEndOfInput >>= \case
-    True -> return e
-    False -> tryParse (parseApplication p') >>= \case
-      -- «Expression» «Expression»
-      Just e' -> return $ Application e e'
-      --
-      Nothing -> return e
-
-
-parseStructural :: Parser Expression -> Parser Expression
-parseStructural p' = getNext >>= \case
-  -- let val «Name» = «Expression» in «Expression» end
-  "let" -> do
-           parseToken "let"
-           parseToken "val"
-           name <- parseName
-           parseToken "="
-           value <- p'
-           parseToken "in"
-           child <- p'
-           return $ Binding name value child
-  -- if «Expression» then «Expression» else «Expression»
-  "if"  -> do
-           parseToken "if"
-           cnd <- p'
-           parseToken "then"
-           thn <- p'
-           parseToken "else"
-           els <- p'
-           return $ Branching cnd thn els
-  --
-  _ -> p'
+  e <- parseLiteral
+  ts <- uses lexed elems
+  i <- use tokenIndex
+  return $! unsafePerformIO (print $ (i, length ts))
+  return $! unsafePerformIO (print "parseApplicationRight")
+  parseLiteral
+  -- (tryParse $ parseLiteral) >>= \case
+  --   Just e' -> return $ Application e e'
+  --   Nothing -> return e
 
 
 parseLambda :: Parser Expression -> Parser Expression
@@ -196,7 +202,7 @@ parseLambda p' = do
   tok <- getNext
   getMaybeNextNext >>= \case
     -- «Expression» => «Expression»
-    Just "=>" -> do parseToken tok ; parseToken "=>" ; Lambda tok <$> p'
+    Just "=>" -> do parseToken tok ; parseToken "=>" ; Lambda tok <$> parseLambda p'
     --
     _ -> p'
 
@@ -253,19 +259,14 @@ parseName = parseNext
 -}
 
 
-subParse :: Parser a -> Parser (Maybe (a, ParseState))
-subParse p = do
-  -- return $! unsafePerformIO (print "subParse")
-  ps <- get
-  case runStateT p ps of
-    Ok (a, ps') -> return . Just $ (a, ps')
-    Error _     -> return Nothing
+subParse :: Parser a -> Parser (ParseStatus(a, ParseState))
+subParse p = runStateT p <$> get
 
 
 tryParse :: Parser a -> Parser (Maybe a)
 tryParse p = subParse p >>= \case
-  Just (a, ps) -> do put ps ; return $ Just a
-  Nothing -> return Nothing
+  Ok (a, ps) -> do put ps ; return $ Just a
+  _ -> return Nothing
 
 
 -- TODO: right now, this is actually right-associative
@@ -318,9 +319,12 @@ parseUnaryOperation os p =
 
 getNext :: Parser Token
 getNext = do
-  lexed <- use lexed
-  loc <- getLocation
-  return $ lexed!loc
+  inBounds >>= \case
+    True -> do
+      lexed <- use lexed
+      loc <- getLocation
+      return $ lexed!loc
+    False -> errorOutOfBounds
 
 getMaybeNext :: Parser (Maybe Token)
 getMaybeNext = atEndOfInput >>= \case
@@ -341,6 +345,7 @@ parseNext = do
   tok <- getNext
   incrementLocation
   return tok
+
 
 tryParseToken :: Token -> Parser (Maybe Token)
 tryParseToken tok = do
@@ -398,3 +403,13 @@ errorHere :: String -> Parser a
 errorHere msg = do
   loc <- getLocation
   lift $ Error (loc, msg)
+
+{-
+  # Debug
+-}
+
+debugLexed :: Parser ()
+debugLexed = do
+  i <- use tokenIndex
+  ts <- uses lexed elems
+  return $! unsafePerformIO $! print (drop i ts)

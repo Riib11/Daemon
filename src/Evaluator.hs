@@ -72,8 +72,9 @@ instance Monad EvaluatorStatus where
   Error e >>= _ = Error e
 
 instance Show a => Show (EvaluatorStatus a) where
-  show (Ok a)    = show a
-  show (Error e) = show e
+  show (Ok a)           = show a
+  show (Error (e, msg)) = "[!] Error in "++show e++", "++msg
+
 {-
   # Evaluator
 -}
@@ -103,37 +104,45 @@ subEvaluate evtr = do
   lift $ evalStateT evtr st
 
 
-evaluateApplication :: P.Name -> P.Expression -> EvaluationContext -> Value -> Evaluator Value
-evaluateApplication n e ctx nV = subEvaluate $ do
-  context %= union ctx
-  context . at n .= Just nV
-  evaluateExpression e
-
-
 evaluateExpression :: P.Expression -> Evaluator Value
 evaluateExpression expr = case expr of
-  P.Binding n e f         -> do
-                                  eV <- Lazy e <$> use context
-                                  context . at n .= Just eV
-                                  return eV
+  P.Binding n e f          -> do
+                              eV <- evaluateExpression e
+                              context . at n .= Just eV
+                              evaluateExpression f
 
-  P.Application e f       -> do
-                                  fV <- evaluateExpression f
-                                  (coerceValue =<< evaluateExpression e) >>= \case
-                                    Closure n e ctx -> evaluateApplication n e ctx fV
-                                    eV -> errorUnexpected expr "«Closure»" eV
+  P.Application e f        -> do
+                              fV <- evaluateExpression f
+                              (n, e, ctx) <- evaluateClosure e
+                              evaluateApplication n fV e ctx
 
-  P.Lambda n e            -> Closure n e <$> use context
+  P.Lambda n e              -> Closure n e <$> use context
 
-  P.Branching c e f       -> fail "TODO"
+  P.Branching c e f         -> evaluateBoolean e >>= \case
+                                 True  -> evaluateExpression e
+                                 False -> evaluateExpression f
 
-  P.BinaryOperation o e f -> evaluateBinaryOperation o e f
+  P.BinaryOperation o e f   -> evaluateBinaryOperation o e f
 
-  P.UnaryOperation o e    -> evaluateUnaryOperation o e
+  P.UnaryOperation o e      -> evaluateUnaryOperation o e
 
-  P.Literal t             -> evaluateLiteral t
+  P.Literal t               -> evaluateLiteral t
 
-  P.Associated e          -> evaluateExpression e
+  P.Associated e            -> evaluateExpression e
+
+
+evaluateClosure :: P.Expression -> Evaluator (P.Name, P.Expression, EvaluationContext)
+evaluateClosure e = evaluateExpression e >>= \case
+  Closure n e ctx -> return (n, e, ctx)
+  eV -> errorUnexpected e "«Closure»" eV
+
+
+--  [n => v](e with ctx)
+evaluateApplication :: P.Name -> Value -> P.Expression -> EvaluationContext -> Evaluator Value
+evaluateApplication n v e ctx = subEvaluate $ do
+  context %= union ctx
+  context . at n .= Just v
+  evaluateExpression e
 
 
 integerBinaryOperators :: Map P.BinaryOperator (Int -> Int -> Int)

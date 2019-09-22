@@ -9,15 +9,17 @@ main :: IO ()
 main = do
   putStrLn $ '\n' : replicate 40 '='
 
-  -- print . lex $ "hello\nworld"
-  -- print . lex $ "1 + 2 + 3"
-  -- print . lex $ "(1 + 2) + (3 + 4 + (5 + 6))"
-
-  let input = "true + true"
-  putStrLn $ "input:  "++show input
-  let lexed = lex input
-  putStrLn $ "lexed:  "++show lexed
-  let parsed = parse lexed
-  putStrLn $ "parsed: "++show parsed
+  testInput "x"
+  testInput "x := 1; y := 2; 3"
+  testInput "x y"
 
   putStrLn $ replicate 40 '='
+
+
+testInput :: String -> IO ()
+testInput input = do
+  putStrLn $ "input:  "++show input
+  let lexed = lex input
+  putStrLn $ "lexed:  "++displayLexed lexed
+  let parsed = parse lexed
+  putStrLn $ "parsed: "++show parsed
